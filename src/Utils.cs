@@ -1,6 +1,8 @@
+using System;
 using System.IO;
 using System.Text;
 using System.Text.RegularExpressions;
+using System.Linq;
 
 /// <summary>
 /// Protocol utility class fully consistent with the Python version

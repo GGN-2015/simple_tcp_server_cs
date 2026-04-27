@@ -15,3 +15,10 @@ See [./src/SampleUsage.cs](./src/SampleUsage.cs)
 ```cmd
 src\LaunchTest.bat
 ```
+
+## In Unity
+
+To use `SimpleTcpClient` in Unity, you need to copy `src\SimpleTcpClient.cs` and `src\Utils.cs` to your Unity project.
+
+The project has been tested under Unity Edtior version:
+- `2022.3.62f3c1 (LTS)`
