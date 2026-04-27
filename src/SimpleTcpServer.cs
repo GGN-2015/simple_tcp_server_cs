@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using System.Collections.Generic;
 using System.Net;
 using System.Net.Sockets;
@@ -26,27 +27,15 @@ public class SimpleTcpServer : IDisposable
     private readonly double _clientTimeout;
     private readonly int _maxBuffer = Utils.MAX_BUFFER;
 
-    private Socket? _serverSocket;
+    private Socket _serverSocket;
     private bool _running;
 
-    // Connection Pool: Client Address -> Socket
     private readonly Dictionary<IPEndPoint, Socket> _connPool = new();
-    // Buffer: Client Address -> Receive Buffer
     private readonly Dictionary<IPEndPoint, byte[]> _connBuff = new();
-    // Last Active Time
     private readonly Dictionary<IPEndPoint, DateTime> _lastSeen = new();
     #endregion
 
     #region Constructor
-    /// <summary>
-    /// Initialize TCP Server
-    /// </summary>
-    /// <param name="host">Listening address</param>
-    /// <param name="port">Port</param>
-    /// <param name="workerFunction">Business processing delegate</param>
-    /// <param name="quitToken">Server shutdown command</param>
-    /// <param name="maxListen">Maximum listen backlog</param>
-    /// <param name="clientTimeout">Client timeout in seconds</param>
     public SimpleTcpServer(
         string host,
         int port,
@@ -74,14 +63,11 @@ public class SimpleTcpServer : IDisposable
         _serverSocket.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
         _serverSocket.Bind(new IPEndPoint(IPAddress.Parse(_host), _port));
         _serverSocket.Listen(_maxListen);
-        _serverSocket.Blocking = false; // Non-blocking mode (same as Python)
+        _serverSocket.Blocking = false;
     }
     #endregion
 
     #region Close Single Connection
-    /// <summary>
-    /// Close and clean up a client connection
-    /// </summary>
     private void ConnClose(IPEndPoint addr)
     {
         if (!_connPool.ContainsKey(addr)) return;
@@ -100,13 +86,10 @@ public class SimpleTcpServer : IDisposable
     #endregion
 
     #region Handle New Connection
-    private void HandleClient(Socket conn, IPEndPoint? addr)
+    private void HandleClient(Socket conn, IPEndPoint addr)
     {
-        // Discard socket with invalid address
-        if(addr == null) 
-            return;
+        if (addr == null) return;
 
-        // Address conflict, close old connection
         if (_connPool.ContainsKey(addr))
             ConnClose(addr);
 
@@ -120,9 +103,8 @@ public class SimpleTcpServer : IDisposable
     #region Try Accept New Connections
     private void TryAccept()
     {
-        if(_serverSocket == null)
+        if (_serverSocket == null)
         {
-            Console.WriteLine("_serverSocket == null");
             return;
         }
         try
@@ -130,14 +112,12 @@ public class SimpleTcpServer : IDisposable
             if (_serverSocket.Poll(0, SelectMode.SelectRead))
             {
                 Socket client = _serverSocket.Accept();
-                IPEndPoint? remote = client.RemoteEndPoint as IPEndPoint;
+                IPEndPoint remote = client.RemoteEndPoint as IPEndPoint;
                 HandleClient(client, remote);
             }
         }
         catch (SocketException ex) when (ex.SocketErrorCode == SocketError.WouldBlock)
-        {
-            // No new connections, ignore
-        }
+        { }
         catch { }
     }
     #endregion
@@ -157,9 +137,7 @@ public class SimpleTcpServer : IDisposable
             int read = conn.Receive(buffer);
 
             if (read <= 0)
-            {
                 died = true;
-            }
             else
             {
                 byte[] data = new byte[read];
@@ -169,13 +147,9 @@ public class SimpleTcpServer : IDisposable
             }
         }
         catch (SocketException ex) when (ex.SocketErrorCode == SocketError.WouldBlock)
-        {
-            died = false;
-        }
+        { died = false; }
         catch
-        {
-            died = true;
-        }
+        { died = true; }
 
         return died;
     }
@@ -193,25 +167,11 @@ public class SimpleTcpServer : IDisposable
         {
             bool match = true;
             for (int j = 0; j < len; j++)
-            {
-                if (data[i + j] != sub[j])
-                {
-                    match = false;
-                    break;
-                }
-            }
+                if (data[i + j] != sub[j]) { match = false; break; }
 
-            if (match)
-            {
-                count++;
-                i += len;
-            }
-            else
-            {
-                i++;
-            }
+            if (match) { count++; i += len; }
+            else i++;
         }
-
         return count;
     }
     #endregion
@@ -222,33 +182,22 @@ public class SimpleTcpServer : IDisposable
         bool died = false;
         try
         {
-            // Unescape
             byte[] msgGet = Utils.Unescape(msgNow);
-
-            // Invoke business function
             byte[] retAns;
-            try
-            {
-                retAns = _workerFunction(msgGet);
-            }
-            catch (Exception ex)
-            {
-                retAns = System.Text.Encoding.UTF8.GetBytes(ex.Message);
-            }
 
-            // Escape + Append terminator
+            try { retAns = _workerFunction(msgGet); }
+            catch (Exception ex) { retAns = System.Text.Encoding.UTF8.GetBytes(ex.Message); }
+
             byte[] sendAns = Utils.Escape(retAns);
-            byte[] fullResp = new byte[sendAns.Length + Utils.Eoq().Length];
+            byte[] eoq = Utils.Eoq();
+            byte[] fullResp = new byte[sendAns.Length + eoq.Length];
             Buffer.BlockCopy(sendAns, 0, fullResp, 0, sendAns.Length);
-            Buffer.BlockCopy(Utils.Eoq(), 0, fullResp, sendAns.Length, Utils.Eoq().Length);
+            Buffer.BlockCopy(eoq, 0, fullResp, sendAns.Length, eoq.Length);
 
             _connPool[addr].Send(fullResp);
             _lastSeen[addr] = DateTime.Now;
         }
-        catch
-        {
-            died = true;
-        }
+        catch { died = true; }
 
         return died;
     }
@@ -259,17 +208,14 @@ public class SimpleTcpServer : IDisposable
     {
         if (!_connBuff.ContainsKey(addr)) return true;
         byte[] buff = _connBuff[addr];
-
         if (buff.Length == 0) return false;
 
         byte[] eoq = Utils.Eoq();
         if (CountBytes(buff, eoq) == 0) return false;
 
-        // Split message
         var (msgNow, remaining) = SplitOnce(buff, eoq);
         _connBuff[addr] = remaining;
 
-        // Received shutdown command
         if (CompareBytes(msgNow, _quitToken))
         {
             _running = false;
@@ -288,19 +234,17 @@ public class SimpleTcpServer : IDisposable
     }
     #endregion
 
-    #region Iterate All Clients and Execute Operation
+    #region Iterate All Clients
     private void CheckAll(Func<IPEndPoint, bool> worker)
     {
         var allAddr = new List<IPEndPoint>(_connPool.Keys);
         foreach (var addr in allAddr)
-        {
             if (worker(addr))
                 ConnClose(addr);
-        }
     }
     #endregion
 
-    #region Batch Read / Batch Response
+    #region Batch Operations
     private void AcquireAll() => CheckAll(AcquireOnce);
     private void ResponseAll() => CheckAll(ResponseOnce);
     private void KickTimeout() => CheckAll(CheckTimeout);
@@ -310,12 +254,11 @@ public class SimpleTcpServer : IDisposable
     private void KickAll()
     {
         var allAddr = new List<IPEndPoint>(_connPool.Keys);
-        foreach (var addr in allAddr)
-            ConnClose(addr);
+        foreach (var addr in allAddr) ConnClose(addr);
     }
     #endregion
 
-    #region Main Loop (Equivalent to Python mainloop)
+    #region Main Loop
     public void MainLoop()
     {
         while (_running)
@@ -325,12 +268,11 @@ public class SimpleTcpServer : IDisposable
             ResponseAll();
             KickTimeout();
         }
-
         KickAll();
     }
     #endregion
 
-    #region Utility: Split Byte Array Once
+    #region Utility: Split Once
     private (byte[] part1, byte[] part2) SplitOnce(byte[] buffer, byte[] separator)
     {
         int sepLen = separator.Length;
@@ -338,13 +280,7 @@ public class SimpleTcpServer : IDisposable
         {
             bool match = true;
             for (int j = 0; j < sepLen; j++)
-            {
-                if (buffer[i + j] != separator[j])
-                {
-                    match = false;
-                    break;
-                }
-            }
+                if (buffer[i + j] != separator[j]) { match = false; break; }
 
             if (match)
             {
@@ -355,31 +291,32 @@ public class SimpleTcpServer : IDisposable
                 return (part1, part2);
             }
         }
-
         return (buffer, Array.Empty<byte>());
     }
     #endregion
 
-    #region Utility: Compare Two byte[] for Equality
+    #region Utility: Compare Bytes
     private bool CompareBytes(byte[] a, byte[] b)
     {
         if (a == null || b == null) return false;
         if (a.Length != b.Length) return false;
-
         for (int i = 0; i < a.Length; i++)
             if (a[i] != b[i]) return false;
-
         return true;
     }
     #endregion
 
-    #region Dispose Resources
+    #region Dispose
     public void Dispose()
     {
         _running = false;
         KickAll();
-        _serverSocket?.Close();
-        _serverSocket?.Dispose();
+
+        if (_serverSocket != null)
+        {
+            _serverSocket.Close();
+            _serverSocket.Dispose();
+        }
     }
     #endregion
 }

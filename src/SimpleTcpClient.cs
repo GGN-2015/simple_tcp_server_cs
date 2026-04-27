@@ -1,3 +1,5 @@
+using System;
+using System.IO;
 using System.Net.Sockets;
 
 /// <summary>
@@ -29,7 +31,7 @@ public class SimpleTcpClient : IDisposable
     /// <summary>
     /// Core Method: Send a request and wait for a response (fully consistent with Python request)
     /// </summary>
-    public byte[]? Request(byte[] msg)
+    public byte[] Request(byte[] msg)
     {
         if (!IsConnected) return null;
 
